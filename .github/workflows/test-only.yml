@@ -1,10 +1,10 @@
-name: Deploy Flask App to Custom Server
+name: Test Only (No Deployment)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 env:
   PYTHON_VERSION: '3.11'
@@ -47,7 +47,7 @@ jobs:
         pip install flake8
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
     
-    - name: Run tests
+    - name: Run basic tests
       run: |
         # Create uploads directory if it doesn't exist
         mkdir -p uploads
@@ -80,7 +80,7 @@ jobs:
         echo "Testing app import:"
         python -c "from app import app; print('✓ app imported successfully')" || echo "✗ app import failed"
         
-        # Run tests with maximum verbosity and detailed error reporting
+        # Run basic tests first
         echo "Running basic tests first:"
         python -m pytest tests/test_basic.py -v -s --tb=long || {
           echo "Basic tests failed. Showing error output:"
@@ -99,82 +99,13 @@ jobs:
         echo "Running coverage report:"
         python -m pytest tests/ --cov=app --cov-report=term-missing || echo "No coverage report available"
 
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Check deployment secrets
-      id: check-secrets
-      run: |
-        echo "Checking deployment secrets..."
-        if [ -z "${{ secrets.SERVER_HOST }}" ] || [ -z "${{ secrets.SERVER_USER }}" ] || [ -z "${{ secrets.SERVER_SSH_KEY }}" ]; then
-          echo "⚠️ Deployment secrets not configured - skipping deployment"
-          echo "To enable deployment, add the following secrets to your repository:"
-          echo "  - SERVER_HOST: Your server hostname/IP"
-          echo "  - SERVER_USER: SSH username"
-          echo "  - SERVER_SSH_KEY: SSH private key"
-          echo "  - SERVER_PORT: SSH port (optional, defaults to 22)"
-          echo "deploy_available=false" >> $GITHUB_OUTPUT
-        else
-          echo "✅ All required secrets are configured"
-          echo "deploy_available=true" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Deploy to Custom Server
-      if: steps.check-secrets.outputs.deploy_available == 'true'
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        script: |
-          # Navigate to app directory
-          cd /var/www/${{ env.APP_NAME }}
-          
-          # Backup current version
-          sudo cp -r . ../backup-$(date +%Y%m%d-%H%M%S) || true
-          
-          # Pull latest changes
-          git pull origin main
-          
-          # Activate virtual environment
-          source venv/bin/activate
-          
-          # Install/update dependencies
-          pip install -r requirements.txt
-          
-          # Run database migrations (if any)
-          # python migrate.py || true
-          
-          # Collect static files (if needed)
-          # python manage.py collectstatic --noinput || true
-          
-          # Restart the application
-          sudo systemctl restart ${{ env.APP_NAME }}
-          sudo systemctl reload nginx
-          
-          # Check if service is running
-          sudo systemctl is-active --quiet ${{ env.APP_NAME }} && echo "✅ App deployed successfully" || echo "❌ Deployment failed"
-    
-    - name: Skip deployment
-      if: steps.check-secrets.outputs.deploy_available == 'false'
-      run: |
-        echo "🚫 Deployment skipped - secrets not configured"
-        echo "Tests passed successfully! 🎉"
-
   notify:
-    needs: [test, deploy]
+    needs: test
     runs-on: ubuntu-latest
     if: always()
     
     steps:
-    - name: Notify deployment status
+    - name: Notify test status
       uses: 8398a7/action-slack@v3
       if: env.SLACK_WEBHOOK_URL != ''
       with:
@@ -182,4 +113,4 @@ jobs:
         channel: '#deployments'
         webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
       env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} 
