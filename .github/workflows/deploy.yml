@@ -1,17 +1,11 @@
-name: Deploy Flask App to Custom Server
+name: Deploy to PythonAnywhere
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  PYTHON_VERSION: '3.11'
-  APP_NAME: 'flask-excel-app'
 
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
     
     steps:
@@ -21,165 +15,49 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
+        python-version: '3.10'
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest  # For testing
     
-    - name: Run diagnostic script
+    - name: Deploy to PythonAnywhere
       run: |
-        echo "Running diagnostic script to identify issues..."
-        python test_diagnostic.py
-    
-    - name: Run linting (optional)
-      run: |
-        pip install flake8
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    
-    - name: Run tests
-      run: |
-        # Create uploads directory if it doesn't exist
-        mkdir -p uploads
+        # Install required packages for API calls
+        pip install requests
         
-        # Show Python version and environment
-        echo "Python version:"
-        python --version
+        # Create deployment script
+        cat << 'EOF' > deploy.py
+        import requests
+        import os
         
-        echo "Installed packages:"
-        pip list
+        username = "${{ secrets.PYTHONANYWHERE_USERNAME }}"
+        token = "${{ secrets.PYTHONANYWHERE_API_TOKEN }}"
+        domain = "${{ secrets.PYTHONANYWHERE_DOMAIN }}"
         
-        echo "Current directory:"
-        pwd
-        ls -la
+        # Pull latest code
+        response = requests.post(
+            f'https://www.pythonanywhere.com/api/v0/user/{username}/consoles/',
+            headers={'Authorization': f'Token {token}'},
+            json={
+                'executable': 'bash',
+                'arguments': ['-c', f'cd /home/{username}/your-repo-name && git pull origin main && /home/{username}/.virtualenvs/myflaskapp/bin/pip install -r requirements.txt']
+            }
+        )
+        print(f"Console creation: {response.status_code}")
         
-        echo "Test directory contents:"
-        ls -la tests/
+        # Reload web app
+        response = requests.post(
+            f'https://www.pythonanywhere.com/api/v0/user/{username}/webapps/{domain}/reload/',
+            headers={'Authorization': f'Token {token}'}
+        )
+        print(f"Reload status: {response.status_code}")
+        if response.status_code == 200:
+            print("✅ Deployment successful!")
+        else:
+            print(f"❌ Deployment failed: {response.text}")
+        EOF
         
-        echo "Requirements file:"
-        cat requirements.txt
-        
-        # Try to import modules individually to identify issues
-        echo "Testing imports:"
-        python -c "import pandas; print('✓ pandas imported successfully')" || echo "✗ pandas import failed"
-        python -c "import openpyxl; print('✓ openpyxl imported successfully')" || echo "✗ openpyxl import failed"
-        python -c "import numpy; print('✓ numpy imported successfully')" || echo "✗ numpy import failed"
-        python -c "import flask; print('✓ flask imported successfully')" || echo "✗ flask import failed"
-        
-        # Test app import specifically
-        echo "Testing app import:"
-        python -c "from app import app; print('✓ app imported successfully')" || echo "✗ app import failed"
-        
-        # Run tests with maximum verbosity and detailed error reporting
-        echo "Running basic tests first:"
-        python -m pytest tests/test_basic.py -v -s --tb=long || {
-          echo "Basic tests failed. Showing error output:"
-          python -m pytest tests/test_basic.py -v -s --tb=long 2>&1
-          exit 1
-        }
-        
-        echo "Basic tests passed. Running full tests:"
-        python -m pytest tests/test_app.py -v -s --tb=long --maxfail=1 || {
-          echo "Full tests failed. Showing last 50 lines of error output:"
-          python -m pytest tests/test_app.py -v -s --tb=long 2>&1 | tail -50
-          exit 1
-        }
-        
-        # Show test coverage if available
-        echo "Running coverage report:"
-        python -m pytest tests/ --cov=app --cov-report=term-missing || echo "No coverage report available"
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Check deployment secrets
-      id: check-secrets
-      run: |
-        echo "Checking deployment secrets..."
-        if [ -z "${{ secrets.SERVER_HOST }}" ] || [ -z "${{ secrets.SERVER_USER }}" ] || [ -z "${{ secrets.SERVER_SSH_KEY }}" ]; then
-          echo "⚠️ Deployment secrets not configured - skipping deployment"
-          echo "To enable deployment, add the following secrets to your repository:"
-          echo "  - SERVER_HOST: Your server hostname/IP"
-          echo "  - SERVER_USER: SSH username"
-          echo "  - SERVER_SSH_KEY: SSH private key"
-          echo "  - SERVER_PORT: SSH port (optional, defaults to 22)"
-          echo "deploy_available=false" >> $GITHUB_OUTPUT
-        else
-          echo "✅ All required secrets are configured"
-          echo "deploy_available=true" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Deploy to Custom Server
-      if: steps.check-secrets.outputs.deploy_available == 'true'
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        port: ${{ secrets.SERVER_PORT || 22 }}
-        script: |
-          # Navigate to app directory
-          cd /var/www/${{ env.APP_NAME }}
-          
-          # Backup current version
-          sudo cp -r . ../backup-$(date +%Y%m%d-%H%M%S) || true
-          
-          # Pull latest changes
-          git pull origin main
-          
-          # Activate virtual environment
-          source venv/bin/activate
-          
-          # Install/update dependencies
-          pip install -r requirements.txt
-          
-          # Run database migrations (if any)
-          # python migrate.py || true
-          
-          # Collect static files (if needed)
-          # python manage.py collectstatic --noinput || true
-          
-          # Restart the application
-          sudo systemctl restart ${{ env.APP_NAME }}
-          sudo systemctl reload nginx
-          
-          # Check if service is running
-          sudo systemctl is-active --quiet ${{ env.APP_NAME }} && echo "✅ App deployed successfully" || echo "❌ Deployment failed"
-    
-    - name: Skip deployment
-      if: steps.check-secrets.outputs.deploy_available == 'false'
-      run: |
-        echo "🚫 Deployment skipped - secrets not configured"
-        echo "Tests passed successfully! 🎉"
-
-  notify:
-    needs: [test, deploy]
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Notify deployment status
-      uses: 8398a7/action-slack@v3
-      if: env.SLACK_WEBHOOK_URL != ''
-      with:
-        status: ${{ job.status }}
-        channel: '#deployments'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        # Run deployment
+        python deploy.py
