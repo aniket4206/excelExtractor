@@ -37,6 +37,11 @@ jobs:
         pip install -r requirements.txt
         pip install pytest  # For testing
     
+    - name: Run diagnostic script
+      run: |
+        echo "Running diagnostic script to identify issues..."
+        python test_diagnostic.py
+    
     - name: Run linting (optional)
       run: |
         pip install flake8
@@ -47,10 +52,51 @@ jobs:
         # Create uploads directory if it doesn't exist
         mkdir -p uploads
         
-        # Run tests with verbose output and stop on first failure
-        python -m pytest tests/ -v --tb=short || echo "Tests failed, but continuing..."
+        # Show Python version and environment
+        echo "Python version:"
+        python --version
+        
+        echo "Installed packages:"
+        pip list
+        
+        echo "Current directory:"
+        pwd
+        ls -la
+        
+        echo "Test directory contents:"
+        ls -la tests/
+        
+        echo "Requirements file:"
+        cat requirements.txt
+        
+        # Try to import modules individually to identify issues
+        echo "Testing imports:"
+        python -c "import pandas; print('✓ pandas imported successfully')" || echo "✗ pandas import failed"
+        python -c "import openpyxl; print('✓ openpyxl imported successfully')" || echo "✗ openpyxl import failed"
+        python -c "import numpy; print('✓ numpy imported successfully')" || echo "✗ numpy import failed"
+        python -c "import flask; print('✓ flask imported successfully')" || echo "✗ flask import failed"
+        
+        # Test app import specifically
+        echo "Testing app import:"
+        python -c "from app import app; print('✓ app imported successfully')" || echo "✗ app import failed"
+        
+        # Run tests with maximum verbosity and detailed error reporting
+        echo "Running basic tests first:"
+        python -m pytest tests/test_basic.py -v -s --tb=long || {
+          echo "Basic tests failed. Showing error output:"
+          python -m pytest tests/test_basic.py -v -s --tb=long 2>&1
+          exit 1
+        }
+        
+        echo "Basic tests passed. Running full tests:"
+        python -m pytest tests/test_app.py -v -s --tb=long --maxfail=1 || {
+          echo "Full tests failed. Showing last 50 lines of error output:"
+          python -m pytest tests/test_app.py -v -s --tb=long 2>&1 | tail -50
+          exit 1
+        }
         
         # Show test coverage if available
+        echo "Running coverage report:"
         python -m pytest tests/ --cov=app --cov-report=term-missing || echo "No coverage report available"
 
   deploy:
